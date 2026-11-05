@@ -1,0 +1,33 @@
+<body>
+<div class="app">
+  <header>
+    <div class="brand" aria-hidden="true"></div>
+    <div class="kpi"><span class="k">在线来源</span><strong class="v" id="k0">—</strong></div>
+    <div class="kpi"><span class="k">执行中</span><strong class="v pink" id="k1">—</strong></div>
+    <div class="kpi"><span class="k">最近任务</span><strong class="v" id="k2">—</strong></div>
+    <div class="kpi"><span class="k">累计输出</span><strong class="v" id="k3">—</strong></div>
+    <div class="kpi rate-kpi"><span class="k" id="rateLabel">最近请求均速</span><strong class="v" id="k4">等待采样</strong><small class="rate-meta" id="rateMeta"></small></div>
+    <div class="header-tools"><button type="button" id="toolsToggle" aria-controls="toolsMenu" aria-expanded="false" title="展开工作台操作">菜单 ▾</button><div id="toolsMenu" class="tools-menu" hidden><span id="connection" class="live-indicator"><i></i>连接中</span><button type="button" id="tasksButton" title="查看真实任务、筛选来源和任务状态" aria-haspopup="dialog" aria-controls="tasksDialog">任务</button><button type="button" id="consoleButton" class="console" aria-controls="cpanel" aria-expanded="false" title="打开画面参数（C）">调参</button><button type="button" id="settingsButton" title="画面质量、信息栏与显示设置" aria-haspopup="dialog" aria-controls="settingsDialog">设置</button><button type="button" id="motionButton" aria-pressed="false">暂停</button><button type="button" id="fullscreenButton" title="全屏（F）" aria-pressed="false">全屏</button></div></div>
+  </header>
+  <div class="stage" id="stageWrap">
+    <canvas id="stage" title="任务与工具的真实关联；点击任务节点可查看详情"></canvas>
+    <div class="ov chk" id="chk"><b id="chkK">真实任务关联</b><span id="chkV">等待任务数据</span></div>
+    <div class="scene-legend" id="sceneLegend">任务 → 工具 · 主任务 → 子任务</div>
+    <div class="ov status"><div class="big" id="stBig">正在读取本机任务</div><div class="sm" id="stageSub">等待 Codex / DSH</div></div>
+    <div id="nodeTooltip" class="node-tooltip" hidden></div>
+  </div>
+  <section class="panels" id="infoPanels" aria-label="任务信息栏">
+    <div class="p"><h3>实时事件</h3><div class="feed" id="feed"></div><div class="cap">最近工具调用 · 记录内的真实事件</div></div>
+    <div class="p"><h3 title="ADVECTION / PARTICLE SOLVER">粒子流场</h3><canvas id="cAdv"></canvas><div class="btns" id="advBtns" aria-label="流场显示方式"><button type="button" class="on" data-flow-mode="advection" aria-pressed="true">平流</button><button type="button" data-flow-mode="projection" aria-pressed="false">投影</button><button type="button" data-flow-mode="render" aria-pressed="false">渲染</button></div></div>
+    <div class="p"><h3 class="with-actions"><span>当前任务</span><button type="button" id="workspaceDetailsButton">详情 ↗</button></h3><div class="task-summary" id="code"></div></div>
+    <div class="p"><h3 id="sourcePanelHeading" title="SOURCE LINK / CONTEXT FIELD">来源与上下文</h3><canvas id="cDiff"></canvas><div class="cap" id="sourceCanvasCaption">来源连接 · 当前任务上下文</div></div>
+    <div class="p"><h3 class="with-actions"><span id="dispatchHeading">任务编队</span><button id="allTasksButton">全部任务 ↗</button></h3><div class="agents" id="agents"></div><div class="cap" id="dispatchCaption">点击任务，定位对应连线与环带</div></div>
+    <div class="p"><h3 id="matrixPanelHeading" title="SESSION / CONTEXT INDEX">任务用量对比</h3><canvas id="cIdx"></canvas><div class="cap" id="matrixCaption">CTX / IN / OUT / CACHE · <a href="https://github.com/Ryder191/haloflux" target="_blank" rel="noreferrer" title="原作 HALOFLUX · Ryder191">HALOFLUX ↗</a></div></div>
+  </section>
+</div>
+<button id="togglePanels" class="panel-toggle" aria-controls="infoPanels" aria-expanded="true">收起信息栏 ▾</button>
+<dialog id="settingsDialog"><form method="dialog"><div class="dialog-heading"><h2>大屏设置</h2><button value="cancel" aria-label="关闭">×</button></div><label class="browser-name-field">大屏名称<input id="nameInput" maxlength="40" placeholder="AGT 作战指挥台"></label><div class="setting-check quality-setting"><span><span id="qualityLabel">画面质量</span><small id="renderFps" aria-live="polite">测量中</small></span><input type="hidden" id="qualityInput" value="balanced"><div id="qualityOptions" class="quality-options" role="group" aria-labelledby="qualityLabel"><button type="button" data-quality="balanced" aria-pressed="true">均衡</button><button type="button" data-quality="high" aria-pressed="false">精细</button><button type="button" data-quality="low" aria-pressed="false">流畅</button></div></div><div class="setting-check"><span id="panelViewLabel">面板画面</span><input type="hidden" id="panelViewInput" value="monitor"><div id="panelViewOptions" class="quality-options" role="group" aria-labelledby="panelViewLabel"><button type="button" data-panel-view="monitor" aria-pressed="true">实时数据</button><button type="button" data-panel-view="original" aria-pressed="false">原版动效</button></div></div><label class="setting-check"><span>安静模式</span><input id="quietInput" type="checkbox"></label><label class="setting-check"><span>显示底部信息栏</span><input id="panelsInput" type="checkbox"></label><a class="browser-entry" href="http://127.0.0.1:8767/" target="_blank" rel="noreferrer">在浏览器中打开完整工作台 ↗</a><button id="saveSettings" value="save">保存设置</button></form></dialog>
+<dialog id="tasksDialog"><div class="dialog-heading"><h2>任务编队</h2><span id="taskFilters"><button data-filter="all" class="on">全部来源</button><button data-filter="codex">Codex</button><button data-filter="dsh">DSH</button></span><button id="closeTasks" aria-label="关闭">×</button></div><div class="task-toolbar"><span id="taskCount">等待任务</span><label><input type="checkbox" id="includeSubagents">显示协作子任务</label><label><input type="checkbox" id="activeOnly">仅执行中</label></div><div class="routes" id="routes"></div><div id="sourceNotes" class="muted"></div><div id="taskList"></div><div class="task-detail" id="focusDetails"></div></dialog>
+<div id="toast" role="status"></div>
+<script src="/runtime.js?v=4" defer></script>
+</body></html>

@@ -1,0 +1,9 @@
+JetBrains Mono, weights 400 / 600 / 800.
+Original font family: https://github.com/JetBrains/JetBrainsMono
+Retrieved 2026-11-04 from Google's official Fonts distribution:
+https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap
+https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPQ.ttf
+https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8FqtjPQ.ttf
+https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8SKtjPQ.ttf
+SIL Open Font License 1.1: see OFL.txt, retained from
+https://github.com/google/fonts/blob/main/ofl/jetbrainsmono/OFL.txt

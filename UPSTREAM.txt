@@ -1,0 +1,17 @@
+Original work: HALOFLUX by Ryder191 (RYDER CODE / Ms MAIKEBAIs CAT)
+Source: https://github.com/Ryder191/haloflux
+Baseline commit: 016bef651c4f911f08039ba159d36a6f246ff5d2
+Retrieved: 2026-11-04
+
+Modified from HALOFLUX: local personal AGT command center. Original off-center
+geometry, ring rims, layered outer beams and automatic camera are retained.
+The inner network and ring information are replaced by recorded session, tool
+call and parent/child relationships with explicit data binding. Missing data
+is not synthesized. Ambient outer FX remain aesthetic. UI is Chinese with a
+compact header and one collapsible row. A Wallpaper Engine entry bridges the
+local dashboard and native wallpaper properties.
+
+Required Notice: Copyright (c) 2026 Ryder191 (RYDER CODE / Ms MAIKEBAIs CAT) - https://github.com/Ryder191/haloflux
+Required Notice: Noncommercial use only. Any commercial use is strictly prohibited. No commercial licenses are offered.
+
+License: vendor/haloflux/LICENSE (retained without modification).
