@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import datetime as dt
+import heapq
 import json
 import mimetypes
 import os
@@ -21,6 +23,12 @@ from output_rates import codex_request_sample, CCSwitchRateReader, best_sample, 
 ROOT = Path(__file__).resolve().parent
 HOME = Path.home()
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+SESSION_LIMIT = 32
+LOG_READ_LIMIT = 2 * 1024 * 1024
+LOG_RECORD_LIMIT = 1024
+PROJECTION_READ_LIMIT = 2 * 1024 * 1024
+PROCESS_POLL_SECONDS = 15
+COLLECTION_POLL_SECONDS = 1
 
 
 def stamp(value):
@@ -81,23 +89,88 @@ def codex_session_identity(row):
             'agentPath': agent_path, 'nickname': nickname, 'role': role or 'Agent'}
 
 
-def tail_json(path, size=1024 * 1024):
+def read_json_window(path, size=LOG_READ_LIMIT, offset=None):
+    """Read at most one bounded window, retaining incomplete JSON for next poll.
+
+    A tool result can occupy a multi-megabyte line. Never use an unbounded
+    readline to skip its prefix, or read through concurrent appends to EOF.
+    """
     with path.open("rb") as f:
-        total = path.stat().st_size
-        offset = max(0, total - size)
-        f.seek(offset)
-        if offset:
-            f.readline()
-        lines = f.read().splitlines()
+        total = os.fstat(f.fileno()).st_size
+        start = max(0, total - size)
+        if offset is not None and start <= offset <= total:
+            start = offset
+        f.seek(max(0, start - 1))
+        data = f.read(total - f.tell())
+    if start:
+        preceding, data = data[:1], data[1:]
+        if preceding != b'\n':
+            data = data.partition(b'\n')[2]
+    lines = data.splitlines(keepends=True)
     result = []
-    for line in lines:
+    next_offset = total
+    for index, line in enumerate(lines):
         try:
             item = json.loads(line)
             if isinstance(item, dict):
                 result.append(item)
         except (ValueError, UnicodeError):
-            pass  # an actively written final line can be incomplete
-    return result
+            if index == len(lines) - 1 and not line.endswith(b'\n'):
+                next_offset = total - len(line)
+    return result, next_offset
+
+
+def tail_json(path, size=1024 * 1024):
+    return read_json_window(path, size)[0]
+
+
+def compact_log_record(event):
+    """Keep only telemetry metadata; never retain tool outputs or chat text."""
+    event_kind = event.get('type')
+    if event_kind not in ('event_msg', 'response_item', 'token_usage_record', 'turn_context'):
+        return None
+    payload = event.get('payload')
+    if not isinstance(payload, dict):
+        return None
+    kept = {key: short(payload[key], 200) for key in
+            ('type', 'name', 'call_id', 'id', 'response_id', 'role', 'model')
+            if isinstance(payload.get(key), str)}
+    for key in ('started_at_ms', 'completed_at_ms'):
+        if isinstance(payload.get(key), (int, float)):
+            kept[key] = payload[key]
+    token_keys = ('input_tokens', 'output_tokens', 'cached_input_tokens',
+                  'reasoning_output_tokens', 'total_tokens')
+    def usage(value):
+        return {key: value[key] for key in token_keys
+                if isinstance(value.get(key), (int, float))} if isinstance(value, dict) else {}
+    for key in ('usage', 'thread_token_usage'):
+        if isinstance(payload.get(key), dict):
+            kept[key] = usage(payload[key])
+    info = payload.get('info')
+    if isinstance(info, dict):
+        kept['info'] = {key: usage(info[key]) for key in
+                        ('total_token_usage', 'last_token_usage') if isinstance(info.get(key), dict)}
+        if isinstance(info.get('model_context_window'), (int, float)):
+            kept['info']['model_context_window'] = info['model_context_window']
+    item = payload.get('item')
+    if isinstance(item, dict):
+        kept['item'] = {key: short(item[key], 200) for key in
+                        ('type', 'id', 'call_id', 'name', 'tool_name', 'status')
+                        if isinstance(item.get(key), str)}
+        tool = item.get('tool')
+        if isinstance(tool, dict):
+            tool = tool.get('name')
+        if isinstance(tool, str):
+            kept['item']['tool'] = short(tool, 100)
+        if isinstance(item.get('exit_code'), int):
+            kept['item']['exit_code'] = item['exit_code']
+    settings = payload.get('thread_settings')
+    if isinstance(settings, dict) and isinstance(settings.get('model'), str):
+        kept['thread_settings'] = {'model': short(settings['model'], 100)}
+    timestamp = event.get('timestamp')
+    return {'type': event_kind,
+            'timestamp': short(timestamp, 80) if isinstance(timestamp, str) else timestamp,
+            'payload': kept}
 
 
 def detect_processes():
@@ -132,6 +205,7 @@ class CodexAdapter:
     def __init__(self, home=None):
         self.home = Path(home if home is not None else os.environ.get('CODEX_HOME') or HOME / '.codex').expanduser()
         self.cache = {}
+        self.log_records = {}
 
     def parse_log(self, row, now):
         row = dict(row)
@@ -141,14 +215,29 @@ class CodexAdapter:
         if cached and cached[0] == (stat.st_size, stat.st_mtime_ns):
             result = dict(cached[1])
         else:
-            records = tail_json(path, 2 * 1024 * 1024)
-            usage, last_usage, window = {}, {}, 0
+            state = self.log_records.get(str(path))
+            append = bool(cached and state and stat.st_size > cached[0][0])
+            incoming, offset = read_json_window(path, LOG_READ_LIMIT, state[0] if append else None)
+            continuous = append and stat.st_size - state[0] <= LOG_READ_LIMIT
+            records = state[1] if continuous else deque(maxlen=LOG_RECORD_LIMIT)
+            incoming = [compact for event in incoming if (compact := compact_log_record(event)) is not None]
+            # Read every metadata entry in the initial window before trimming
+            # history, so early cumulative totals/lifecycle markers are kept.
+            history = [*records, *incoming]
+            records.extend(incoming)
+            self.log_records[str(path)] = (offset, records)
+            previous = cached[1] if cached and append else {}
+            usage = {'input_tokens': previous.get('inputTokens', 0),
+                     'output_tokens': previous.get('outputTokens', 0),
+                     'cached_input_tokens': previous.get('cachedTokens', 0)}
+            last_usage = {'input_tokens': previous.get('contextTokens', 0)}
+            window = previous.get('contextWindow', 0)
             boundary = None
             last_at = stat.st_mtime
-            last_tool = ""
+            last_tool = previous.get('lastTool', '')
             events = []
             calls = 0
-            for event in records:
+            for event in history:
                 payload = event.get("payload") or {}
                 kind = payload.get("type")
                 at = stamp(event.get("timestamp"))
@@ -185,8 +274,8 @@ class CodexAdapter:
                         usage = token
             # If the last lifecycle marker is outside the tail, retain a previously
             # observed boundary instead of resetting a long-running task to idle.
-            if boundary is None and cached:
-                boundary = cached[1].get("boundary")
+            if boundary is None and previous:
+                boundary = previous.get("boundary")
             result = {"boundary": boundary, "lastAt": last_at, "lastTool": last_tool,
                       "inputTokens": int(usage.get("input_tokens") or 0),
                       "outputTokens": int(usage.get("output_tokens") or 0),
@@ -194,10 +283,10 @@ class CodexAdapter:
                       "contextTokens": int(last_usage.get("input_tokens") or 0),
                       "contextWindow": int(window or 0), "events": events[-12:],
                       "toolCallsInTail": calls}
-            self.cache[str(path)] = ((stat.st_size, stat.st_mtime_ns), result)
             normalized = summarize_calls(records, row['id'], stamp, short)
             result.update(normalized)
-            result['_rateSample'] = codex_request_sample(records, stamp)
+            result['_rateSample'] = codex_request_sample(history, stamp) or previous.get('_rateSample')
+            self.cache[str(path)] = ((stat.st_size, stat.st_mtime_ns), result)
         active_age = now - result["lastAt"]
         status = result["boundary"] or ("active" if active_age < 90 else "unknown")
         if status in ("running", "active") and active_age > 300:
@@ -209,6 +298,8 @@ class CodexAdapter:
     def collect(self, now):
         candidates = sorted(self.home.glob("state_*.sqlite"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not candidates:
+            self.cache.clear()
+            self.log_records.clear()
             return [], "未发现 Codex 会话库"
         conn = sqlite3.connect(candidates[0].as_uri() + "?mode=ro", uri=True, timeout=1)
         try:
@@ -217,7 +308,7 @@ class CodexAdapter:
             wanted = ["id", "rollout_path", "title", "name", "model", "model_provider", "cwd",
                       "agent_role", "updated_at", "source", "agent_path", "agent_nickname", "first_user_message"]
             fields = ",".join(f'"{key}"' if key in columns else f'NULL AS "{key}"' for key in wanted)
-            rows = conn.execute(f"SELECT {fields} FROM threads WHERE archived=0 ORDER BY updated_at DESC LIMIT 32").fetchall()
+            rows = conn.execute(f"SELECT {fields} FROM threads WHERE archived=0 ORDER BY updated_at DESC LIMIT {SESSION_LIMIT}").fetchall()
             parents = {}
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='thread_spawn_edges'").fetchone():
                 ids = [r['id'] for r in rows]
@@ -227,6 +318,9 @@ class CodexAdapter:
                         f'SELECT parent_thread_id,child_thread_id FROM thread_spawn_edges WHERE child_thread_id IN ({placeholders})', ids)}
         finally:
             conn.close()
+        current = {str(Path(row['rollout_path'])) for row in rows if row['rollout_path']}
+        self.cache = {path: value for path, value in self.cache.items() if path in current}
+        self.log_records = {path: value for path, value in self.log_records.items() if path in current}
         sessions = []
         skipped = 0
         for row in rows:
@@ -246,21 +340,68 @@ class DSHAdapter:
         self.home = Path(home if home is not None else os.environ.get('DSH_HOME') or HOME / '.dsh').expanduser()
         self.cache = {}
 
+    @staticmethod
+    def compact_record(record):
+        rows = record.get('rows') or {}
+        def val(key):
+            return (rows.get(key) or {}).get('val')
+        def fields(value, names):
+            return {key: value[key] for key in names if key in value} if isinstance(value, dict) else {}
+        stats = fields(val('sessionStats'), ('steps',))
+        pending = (val('sessionStats') or {}).get('pendingCalls') or {}
+        stats['pendingCalls'] = {}
+        if isinstance(pending, dict):
+            for call_id in deque(pending, maxlen=12):
+                call = pending[call_id]
+                name = call.get('name') or call.get('tool') if isinstance(call, dict) else ''
+                if isinstance(name, dict):
+                    name = name.get('name')
+                stats['pendingCalls'][short(call_id, 200)] = {'name': short(name, 70)}
+        title = val('title')
+        if isinstance(title, dict):
+            title = title.get('title') or title.get('text')
+        compact = {
+            'title': session_title(title) if str(title or '').strip() else '',
+            'turnBoundary': fields(val('turnBoundary'), ('openTurnStartSeq',)),
+            'sessionStats': stats,
+            'tokenUsage': {'totals': fields((val('tokenUsage') or {}).get('totals'),
+                ('uncachedInputTokens', 'cacheReadTokens', 'outputTokens'))},
+            'contextPressure': fields(val('contextPressure'), ('pressureTokens', 'surfaceTokens', 'contextWindow')),
+            'modelSelection': {'lastUsed': {'model': short(((val('modelSelection') or {}).get('lastUsed') or {}).get('model'), 100)}},
+        }
+        return {'identity': {'cwd': short((record.get('identity') or {}).get('cwd'), 500)},
+                'rows': {key: {'val': value} for key, value in compact.items()}}
+
     def collect(self, now):
         folder = self.home / "storages" / "session_projcache" / "sessions"
         if not folder.exists():
+            self.cache.clear()
             return [], "未发现 DSH 会话投影"
-        paths = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:32]
+        paths = heapq.nlargest(SESSION_LIMIT, folder.glob('*.json'), key=lambda p: p.stat().st_mtime)
+        current = {str(path) for path in paths}
+        self.cache = {path: value for path, value in self.cache.items() if path in current}
         sessions = []
+        skipped = 0
         for path in paths:
             try:
-                modified = path.stat().st_mtime
+                stat = path.stat()
+                modified = stat.st_mtime
+                signature = (stat.st_size, stat.st_mtime_ns)
+                if stat.st_size > PROJECTION_READ_LIMIT:
+                    self.cache.pop(str(path), None)
+                    skipped += 1
+                    continue
                 cached = self.cache.get(str(path))
-                if cached and cached[0] == modified:
+                if cached and cached[0] == signature:
                     record = cached[1]
                 else:
-                    record = json.loads(path.read_text(encoding="utf-8")).get("record", {})
-                    self.cache[str(path)] = (modified, record)
+                    with path.open('rb') as stream:
+                        raw = stream.read(PROJECTION_READ_LIMIT + 1)
+                    if len(raw) > PROJECTION_READ_LIMIT:
+                        skipped += 1
+                        continue
+                    record = self.compact_record(json.loads(raw).get('record', {}))
+                    self.cache[str(path)] = (signature, record)
                 rows = record.get("rows") or {}
                 def val(key):
                     return (rows.get(key) or {}).get("val")
@@ -282,7 +423,8 @@ class DSHAdapter:
                 session_id = path.stem.removeprefix("session-")
                 events = []
                 if isinstance(pending, dict):
-                    for call_id, call in list(pending.items())[-12:]:
+                    for call_id in deque(pending, maxlen=12):
+                        call = pending[call_id]
                         name = call.get("name") or call.get("tool") or "工具执行中" if isinstance(call, dict) else "工具执行中"
                         if isinstance(name, dict):
                             name = name.get('name') or '工具执行中'
@@ -311,13 +453,19 @@ class DSHAdapter:
                 sessions[-1]['tools'] = list(grouped_tools.values())
                 sessions[-1]['usageSamples'] = []
             except (OSError, ValueError, TypeError, AttributeError):
+                skipped += 1
                 continue
-        return sessions, ""
+        return sessions, f'{skipped} 个会话投影过大或暂不可读' if skipped else ''
 
 
 class Collector:
-    def __init__(self, process_detector=detect_processes, adapters=None, rate_reader=None):
+    def __init__(self, process_detector=detect_processes, adapters=None, rate_reader=None,
+                 background_process_probe=None):
         self.detector = process_detector
+        # Injected lightweight detectors remain synchronous for embedders/tests.
+        # The real Windows CIM/subprocess probe must never stall log collection.
+        self.background_process_probe = (process_detector is detect_processes
+            if background_process_probe is None else background_process_probe)
         self.adapters = adapters or {"codex": CodexAdapter(), "dsh": DSHAdapter()}
         self.lock = threading.Lock()
         self.previous = {}
@@ -327,17 +475,54 @@ class Collector:
         self.last_process_at = 0
         self.processes = {"codex": False, "dsh": False}
         self.process_error = ""
+        self.process_checked_at = 0
+        self._process_lock = threading.Lock()
+        self._process_thread = None
+        self._process_result = None
+        self.revision = 0
+        self._semantic_state = None
+        self._etag_epoch = secrets.token_hex(6)
+        self.state_etag = f'W/"agt-{self._etag_epoch}-0"'
+        self.encoded_snapshot = None
         self.rate_reader = rate_reader if rate_reader is not None else CCSwitchRateReader()
+
+    def _detect_sources(self):
+        try:
+            processes = self.detector()
+            return processes, '', time.time()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None, '进程检测暂不可用', time.time()
+
+    def _probe_sources(self):
+        result = self._detect_sources()
+        with self._process_lock:
+            self._process_result = result
+
+    def _refresh_processes(self, now):
+        if self.background_process_probe:
+            with self._process_lock:
+                if self._process_result is not None:
+                    processes, self.process_error, self.process_checked_at = self._process_result
+                    if processes is not None:
+                        self.processes = processes
+                    self._process_result = None
+                if self._process_thread is not None and not self._process_thread.is_alive():
+                    self._process_thread = None
+                if now - self.last_process_at >= PROCESS_POLL_SECONDS and self._process_thread is None:
+                    self.last_process_at = now
+                    self._process_thread = threading.Thread(target=self._probe_sources,
+                        name='agt-source-probe', daemon=True)
+                    self._process_thread.start()
+            return
+        if now - self.last_process_at >= PROCESS_POLL_SECONDS:
+            processes, self.process_error, self.process_checked_at = self._detect_sources()
+            if processes is not None:
+                self.processes = processes
+            self.last_process_at = now
 
     def poll(self):
         now = time.time()
-        if now - self.last_process_at >= 4:
-            try:
-                self.processes = self.detector()
-                self.process_error = ""
-            except (OSError, ValueError, subprocess.SubprocessError):
-                self.process_error = "进程检测暂不可用"
-            self.last_process_at = now
+        self._refresh_processes(now)
         sources, sessions, events = [], [], []
         delta_output = 0
         for key, name in (("codex", "Codex"), ("dsh", "DeepSeek Harness")):
@@ -346,7 +531,8 @@ class Collector:
             items = []
             if online:
                 try:
-                    items, note = self.adapters[key].collect(now)
+                    items, adapter_note = self.adapters[key].collect(now)
+                    note = ' / '.join(value for value in (note, adapter_note) if value)
                 except (OSError, ValueError, sqlite3.Error):
                     note = "会话数据暂不可读，正在重试"
             # A stopped app contributes no live agents, tokens, or running tasks.
@@ -373,6 +559,8 @@ class Collector:
                 item["recent"] = now - item.get("lastAt", 0) < 86400
                 sessions.append({k: v for k, v in item.items() if k not in ("events", "boundary")})
                 events.extend(e for e in item.get("events", []) if now - e.get("at", 0) < 86400)
+        current = {session['source'] + ':' + session['id'] for session in sessions}
+        self.previous = {identity: value for identity, value in self.previous.items() if identity in current}
         sessions.sort(key=lambda s: (s["status"] in ("running", "active"), s["lastAt"]), reverse=True)
         request_rates = self.rate_reader.samples(sessions, now)
         for session in sessions:
@@ -395,7 +583,8 @@ class Collector:
         self.history.append({"at": now, "output": delta_output, "running": active})
         self.history = self.history[-90:]
         snapshot = {"app": "agt-command-center", "version": 3, "at": now, "startedAt": self.started,
-                    "discovering": False, "sources": sources, "sessions": sessions, "events": events,
+                    "discovering": bool(self.background_process_probe and not self.process_checked_at),
+                    "sources": sources, "sessions": sessions, "events": events,
                     "history": self.history, "totals": {"online": sum(s["online"] for s in sources),
                     "running": active, "sessions": len(sessions),
                     "threads": sum(not s.get('isSubagent', False) for s in sessions),
@@ -404,19 +593,34 @@ class Collector:
                     "outputTokens": sum(s.get("outputTokens", 0) for s in sessions),
                     "outputRate": round(sum(s.get("outputRate", 0) for s in sessions), 1),
                     "outputRateMode": 'usage_poll_delta', "outputRateInfo": total_rate}}
-        snapshot['topology'] = build_topology(sources, sessions)
+        semantic = {key: snapshot[key] for key in ('discovering', 'sources', 'sessions', 'events', 'totals')}
+        changed = semantic != self._semantic_state
+        if changed:
+            self.revision += 1
+            self._semantic_state = semantic
+            snapshot['topology'] = build_topology(sources, sessions)
+        else:
+            snapshot['topology'] = self.snapshot.get('topology', {'nodes': [], 'edges': []})
+        snapshot['revision'] = self.revision
         with self.lock:
             self.snapshot = snapshot
+            self.state_etag = f'W/"agt-{self._etag_epoch}-{self.revision}"'
+            self.encoded_snapshot = None
         return snapshot
 
-    def run(self):
-        while True:
+    def run(self, stop_event=None):
+        while stop_event is None or not stop_event.is_set():
+            started = time.monotonic()
             try:
                 self.poll()
             except Exception:
                 # Keep the last snapshot; its timestamp makes stale data explicit.
                 pass
-            time.sleep(2)
+            delay = max(.05, COLLECTION_POLL_SECONDS - (time.monotonic() - started))
+            if stop_event is None:
+                time.sleep(delay)
+            else:
+                stop_event.wait(delay)
 
 
 def make_handler(collector, wallpaper_token=None, input_bridge=None, renderer_recovery=None):
@@ -438,19 +642,23 @@ def make_handler(collector, wallpaper_token=None, input_bridge=None, renderer_re
         def do_OPTIONS(self):
             # File-based wallpapers have an opaque origin. The subsequent GET
             # must also carry the installation token before any data is exposed.
+            allowed_headers = {'x-agt-token', 'content-type'}
+            if urlsplit(self.path).path == '/api/state':
+                allowed_headers.add('if-none-match')
             if (self.headers.get('Host', '').split(':')[0] not in ('localhost', '127.0.0.1')
                     or self.headers.get('Origin') != 'null'
                     or urlsplit(self.path).path not in ('/api/state', '/api/health', '/api/ui')
                     or self.headers.get('Access-Control-Request-Method') not in
                         (('GET', 'POST') if urlsplit(self.path).path == '/api/ui' else ('GET',))
                     or not {'x-agt-token'} <= set(self.headers.get('Access-Control-Request-Headers', '').lower().replace(' ', '').split(','))
-                    or not set(self.headers.get('Access-Control-Request-Headers', '').lower().replace(' ', '').split(',')) <= {'x-agt-token', 'content-type'}):
+                    or not set(self.headers.get('Access-Control-Request-Headers', '').lower().replace(' ', '').split(',')) <= allowed_headers):
                 self.send_error(403)
                 return
             self.send_response(204)
             self.send_header('Access-Control-Allow-Origin', 'null')
             self.send_header('Access-Control-Allow-Methods', 'GET, POST' if urlsplit(self.path).path == '/api/ui' else 'GET')
-            self.send_header('Access-Control-Allow-Headers', 'X-AGT-Token, Content-Type')
+            self.send_header('Access-Control-Allow-Headers', 'X-AGT-Token, Content-Type' +
+                             (', If-None-Match' if urlsplit(self.path).path == '/api/state' else ''))
             self.send_header('Access-Control-Max-Age', '600')
             self.send_header('Vary', 'Origin')
             self.end_headers()
@@ -489,6 +697,8 @@ def make_handler(collector, wallpaper_token=None, input_bridge=None, renderer_re
                 self.send_error(403)
                 return
             route = urlsplit(self.path).path
+            state_etag = checked_at = None
+            not_modified = False
             wallpaper_request = self.headers.get('Origin') == 'null'
             if wallpaper_request and (route not in ('/api/state', '/api/health', '/api/ui')
                     or not valid_wallpaper_token(self.headers.get('X-AGT-Token', ''))):
@@ -501,13 +711,25 @@ def make_handler(collector, wallpaper_token=None, input_bridge=None, renderer_re
                 client_id=parse_qs(urlsplit(self.path).query).get('clientId', [''])[0]
                 body=json.dumps({'commands': input_bridge.drain(client_id) if input_bridge else []}).encode('utf-8')
                 content_type='application/json; charset=utf-8'
-            elif route in ("/api/state", "/api/health"):
+            elif route == '/api/state':
                 with collector.lock:
-                    value = collector.snapshot if route == "/api/state" else {"app": "agt-command-center", "ok": True, "version": 10}
-                    if route == '/api/health' and input_bridge and hasattr(input_bridge,'status'):
-                        value['desktopControls']=input_bridge.status()
-                    if route == '/api/health' and renderer_recovery:
-                        value['rendererRecovery']=renderer_recovery.status()
+                    state_etag = collector.state_etag
+                    checked_at = collector.snapshot.get('at', collector.started)
+                    requested = {tag.strip() for tag in self.headers.get('If-None-Match', '').split(',')}
+                    not_modified = state_etag in requested or '*' in requested
+                    if not_modified:
+                        body = b''
+                    else:
+                        if collector.encoded_snapshot is None:
+                            collector.encoded_snapshot = json.dumps(collector.snapshot, ensure_ascii=False).encode('utf-8')
+                        body = collector.encoded_snapshot
+                content_type = 'application/json; charset=utf-8'
+            elif route == '/api/health':
+                value = {"app": "agt-command-center", "ok": True, "version": 11}
+                if input_bridge and hasattr(input_bridge,'status'):
+                    value['desktopControls']=input_bridge.status()
+                if renderer_recovery:
+                    value['rendererRecovery']=renderer_recovery.status()
                 body = json.dumps(value, ensure_ascii=False).encode("utf-8")
                 content_type = "application/json; charset=utf-8"
             else:
@@ -532,15 +754,21 @@ def make_handler(collector, wallpaper_token=None, input_bridge=None, renderer_re
                 content_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
                 if content_type.startswith("text/") or relative.endswith(".js"):
                     content_type += "; charset=utf-8"
-            self.send_response(200)
+            self.send_response(304 if not_modified else 200)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
+            if not not_modified:
+                self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            if state_etag is not None:
+                self.send_header('ETag', state_etag)
+                self.send_header('X-AGT-Checked-At', f'{checked_at:.6f}')
             if wallpaper_request:
                 self.send_header('Access-Control-Allow-Origin', 'null')
+                if state_etag is not None:
+                    self.send_header('Access-Control-Expose-Headers', 'ETag, X-AGT-Checked-At')
                 self.send_header('Vary', 'Origin')
             self.end_headers()
             try:

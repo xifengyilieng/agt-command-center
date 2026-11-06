@@ -81,13 +81,17 @@ function bindSlot(s){
 function releaseTaskCards(){
   const retired=new Set([...slots,...taskSceneState.ringBindings.keys()]);
   taskSceneState.ringBindings.clear();
-  for(const slot of retired){if(slot.c){slot.c.width=1;slot.c.height=1;slot.c=null;}}
+  for(const slot of retired)agtRetireCard(slot,false);
+  agtReleaseCardPool();
 }
 renderSlot=function(s){
-  const band=RO-R,h=s.hpx,c=s.c||document.createElement('canvas');
-  const pixelWidth=Math.max(1,Math.ceil(band*RING_SC)),pixelHeight=Math.max(1,Math.ceil((h+2)*RING_SC));
-  if(c.width!==pixelWidth||c.height!==pixelHeight){c.width=1;c.height=1;c.width=pixelWidth;c.height=pixelHeight;}
-  const x=c.getContext('2d');x.setTransform(1,0,0,1,0,0);x.clearRect(0,0,c.width,c.height);x.setTransform(RING_SC,0,0,RING_SC,0,0);x.textBaseline='top';
+  const band=RO-R,h=s.hpx;
+  const scale=Math.max(s.c?s.cacheDpr||0:0,agtDesiredCardDpr());
+  const pixelWidth=Math.max(1,Math.ceil(band*scale)),pixelHeight=Math.max(1,Math.ceil((h+2)*scale));
+  const c=s.c||agtTakeCardCanvas(pixelWidth,pixelHeight),bucketWidth=Math.ceil(pixelWidth/64)*64,bucketHeight=Math.ceil(pixelHeight/32)*32;
+  if(c.width<bucketWidth||c.height<bucketHeight){agtCardBackingResizes++;if(c.width<bucketWidth)c.width=bucketWidth;if(c.height<bucketHeight)c.height=bucketHeight;}
+  s.cacheDpr=scale;s.sourceWidth=pixelWidth;s.sourceHeight=pixelHeight;
+  const x=c.getContext('2d');x.setTransform(1,0,0,1,0,0);x.clearRect(0,0,c.width,c.height);x.setTransform(scale,0,0,scale,0,0);x.textBaseline='top';
   const binding=bindSlot(s),session=binding.session,margin=Math.max(8,rimW()+5),width=Math.max(10,band-margin*2),style=binding.style;
   x.fillStyle='#05090a';x.fillRect(0,0,band,h+2);x.save();x.beginPath();x.rect(margin,1,width,h);x.clip();
   x.font=`600 5px ${FONT}`;

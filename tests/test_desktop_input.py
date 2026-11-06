@@ -23,7 +23,7 @@ class DesktopInputTests(unittest.TestCase):
         self.now = 100.0
         self.mouse = FakeMouse()
         self.bridge = DesktopInputBridge(input_source=self.mouse, clock=lambda: self.now, autostart=False)
-        self.payload = {'clientId': 'client-one',
+        self.payload = {'clientId': 'client-one', 'hostPaused': False, 'pageHidden': False,
                         'screen': {'x': -1000, 'y': 0, 'width': 2000, 'height': 1000},
                         'viewport': {'width': 1000, 'height': 500},
                         'regions': [{'key': 'settings', 'x': 900, 'y': 20, 'width': 80, 'height': 30, 'kind': 'click'},
@@ -103,6 +103,31 @@ class DesktopInputTests(unittest.TestCase):
         self.bridge._poll_once()
         self.assertEqual(self.mouse.samples, count)
         self.assertEqual(self.bridge.drain('client-one'), [])
+
+    def test_host_pause_and_hidden_page_discard_commands_without_sampling(self):
+        for flag in ('hostPaused', 'pageHidden'):
+            with self.subTest(flag=flag):
+                self.click((850, 60))
+                suspended = {**self.payload, flag: True}
+                self.bridge.publish(suspended)
+                count = self.mouse.samples
+                self.click((850, 60))
+                self.assertEqual(self.mouse.samples, count)
+                self.assertEqual(self.bridge.drain('client-one'), [])
+                self.bridge.publish(self.payload)
+                self.sample(False, (850, 60))
+                self.click((850, 60))
+                self.assertEqual(self.bridge.drain('client-one'), [{'key': 'settings', 'type': 'click'}])
+
+    def test_native_render_diagnostics_accept_only_bounded_numerical_fields(self):
+        payload = {**self.payload, 'renderStats': {'fps': 59.9, 'targetFps': 60,
+            'frames': 1200, 'rawRafFps': 60.0, 'measuredFps': 59.8, 'limiterSkips': 2,
+            'frameP95Ms': 16.8, 'fallback': False, 'cardPixels': float('inf'),
+            'frameSamples': -10, 'untrustedText': 'ignored', 'effectsLevel': True}}
+        self.bridge.publish(payload)
+        self.assertEqual(self.bridge.status()['rendering'],
+                         {'fps': 59.9, 'targetFps': 60, 'frames': 1200, 'rawRafFps': 60.0,
+                          'measuredFps': 59.8, 'limiterSkips': 2, 'frameP95Ms': 16.8, 'fallback': False})
 
     def test_initial_held_button_does_not_create_a_click(self):
         self.bridge.close()

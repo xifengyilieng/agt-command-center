@@ -19,10 +19,11 @@ function agtStartDesktopControls(){
     if(publishing)return;publishing=true;
     try{await fetch(host.api+'/api/ui',{method:'POST',headers,signal:AbortSignal.timeout(2000),body:JSON.stringify({clientId,
       screen:{x:screen.availLeft||0,y:screen.availTop||0,width:screen.width,height:screen.height},
-      viewport:{width:innerWidth,height:innerHeight},regions:regions(),acknowledged,hostPaused:!!agtState.wallpaperPaused,pageHidden:document.hidden})});}catch{}finally{publishing=false;}
+      viewport:{width:innerWidth,height:innerHeight},regions:regions(),acknowledged,hostPaused:!!agtState.wallpaperPaused,pageHidden:document.hidden,
+      renderStats:window.agtRenderStats||{}})});}catch{}finally{publishing=false;}
   }
   async function receive(){
-    if(busy)return;busy=true;
+    if(busy||document.hidden||agtState.wallpaperPaused)return;busy=true;
     try{
       const response=await fetch(host.api+'/api/ui?clientId='+encodeURIComponent(clientId),{headers:{'X-AGT-Token':host.token},signal:AbortSignal.timeout(2000)});
       if(response.ok)for(const cmd of (await response.json()).commands||[]){
@@ -36,6 +37,7 @@ function agtStartDesktopControls(){
       }
     }catch{}finally{busy=false;}
   }
-  publish();setInterval(publish,1000);setInterval(receive,100);
+  publish();setInterval(publish,2000);setInterval(receive,100);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden){publish();receive();}});
   document.addEventListener('click',()=>setTimeout(publish,0),true);
 }

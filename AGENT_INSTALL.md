@@ -58,7 +58,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -WeDir 'D:\S
 
 ```powershell
 $health = Invoke-RestMethod 'http://127.0.0.1:8767/api/health'
-if ($health.app -ne 'agt-command-center' -or -not $health.ok -or $health.version -lt 10) { throw 'AGT health check failed' }
+if ($health.app -ne 'agt-command-center' -or -not $health.ok -or $health.version -lt 11) { throw 'AGT health check failed' }
 $page = Invoke-WebRequest 'http://127.0.0.1:8767/' -UseBasicParsing
 if ($page.StatusCode -ne 200) { throw 'AGT page check failed' }
 ```
@@ -72,7 +72,7 @@ if ($page.StatusCode -ne 200) { throw 'AGT page check failed' }
 - 错误先检查本项目 `server-error.log`，必要时前台执行 `python server.py`；日志可能含本机信息，分享前检查。
 - 端口冲突先检查所有者，不结束未知进程。重启本项目时仅操作匹配安装目录 `server.py` 绝对路径的 Python 进程。
 - 令牌变化后需重启旧服务、重新安装壁纸；不要公开 `.wallpaper-token` 或 `connection.js`。
-- 更新先 `git status`，保留修改后 `git pull --ff-only`，再执行安装器。后端变化需重启服务，壁纸变化需同步安装并重载。
+- 从 v1.0.0 更新时，先用 `git status` 检查并保留本地修改，再执行 `git pull --ff-only` 和安装器。新版启动器会重启同一安装目录中的旧版采集器。已使用壁纸的用户需用 `-Wallpaper` 或原来的 `-WeDir` 同步资源，然后在 Wallpaper Engine 中重新选择 AGT 壁纸。
 - 卸载：停止本项目服务，删除本项目登录快捷方式；壁纸停用后可删除本项目工程与仓库。不删除 `.codex`、`.dsh` 等应用数据。
 
 ## 开发验证

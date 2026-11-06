@@ -32,7 +32,7 @@ def project_definition():
         'brightness':{'type':'slider','text':'画面亮度','value':100,'min':15,'max':100,'step':1,'order':103},
         'ringspeed':{'type':'slider','text':'圆环转速','value':3,'min':0,'max':3,'step':.05,'fraction':True,'precision':2,'order':104},
     }
-    return {'title':'AGT 真实任务作战桌面','type':'web','file':'index.html','preview':'preview.png','version':11,
+    return {'title':'AGT 真实任务作战桌面','type':'web','file':'index.html','preview':'preview.png','version':12,
         'description':'本机 Codex / DeepSeek Harness 真实任务桌面。保留 HALOFLUX 节拍驱动的编织光场、彗星束冲击和五层外光束，多彩环带绑定真实任务。稀疏任务连线、可操作的参数与设置、三档画质及可切换的粒子流场；底部六块可收起。编织光场与冲击是视觉效果，任务数据与关系来自本机记录。需要随附的 AGT 本机采集器。\n\nModified from HALOFLUX by Ryder191 (RYDER CODE / Ms MAIKEBAIs CAT).\nOriginal work: HALOFLUX by Ryder191 (RYDER CODE / Ms MAIKEBAIs CAT)\nSource: https://github.com/Ryder191/haloflux\nLicense: PolyForm Noncommercial 1.0.0. Noncommercial use only. No monetization.\n本地项目标识：agt-command-center',
         'general':{'properties':properties},'tags':['Technology'],'contentrating':'Everyone','ratingsex':'none','ratingviolence':'none'}
 
@@ -64,7 +64,7 @@ def install(engine):
     (target/'index.html').write_text(html,encoding='utf-8')
     (target/'connection.js').write_text(
         'window.agtWallpaperHost='+json.dumps({'api':'http://127.0.0.1:8767','token':token,
-            'properties':{},'general':{'fps':30},'paused':False,'native':False})+';\n'
+            'properties':{},'general':{'fps':60},'paused':False,'native':False})+';\n'
         'window.wallpaperPropertyListener={'
         'applyUserProperties:function(p){window.agtWallpaperHost.native=true;Object.assign(window.agtWallpaperHost.properties,p);},'
         'applyGeneralProperties:function(p){window.agtWallpaperHost.native=true;Object.assign(window.agtWallpaperHost.general,p);},'

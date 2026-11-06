@@ -14,6 +14,8 @@
 
 预览使用空数据状态；安装后展示你自己电脑上已记录的任务。
 
+v1.1.0 改善了壁纸文字清晰度、帧调度和任务同步，详见 [更新记录](CHANGELOG.md)。
+
 基于 **HALOFLUX by Ryder191（RYDER CODE / Ms MAIKEBAIs CAT）** 修改。继承原作非商业限制，适用范围见 [LICENSE](LICENSE)。
 
 ## 能做什么
@@ -86,7 +88,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -WeDir "D:\S
 - **8767 端口占用**：检查占用者，不要结束未知进程。启动器与壁纸连接默认使用此端口。
 - **壁纸数据离线**：运行 `启动采集器.cmd`，确认 `/api/health` 正常；令牌改变后重启采集器，重新执行壁纸安装并在宿主重载此壁纸。
 - **找不到 Wallpaper Engine**：使用 `-WeDir` 指向含 `wallpaper64.exe` 或 `wallpaper32.exe` 的目录。
-- **掉帧**：选择「流畅」，检查宿主帧率和暂停规则。DeskGo 兼容与异常恢复范围见 [安装指南](AGENT_INSTALL.md)。
+- **资源占用、模糊或掉帧**：默认「均衡」以 60 FPS 为目标，实际受宿主帧率与设备负载限制。「流畅」为 30 FPS。文字与图表按屏幕像素独立绘制，柔光与光场使用有上限的效果缓冲，环带缓存可见卡片及有限候补。帧间隔持续变长时先降低效果复杂度。效果已降档且绘制耗时持续超出预算时，才自动降至 30 FPS。升级会替换旧版整体缩小画面、固定 24 FPS 的配置一次，之后保留用户选择。采集器增量读取日志并清理旧会话缓存，可见时约每秒同步，恢复显示立即刷新。任务可见时间还取决于数据源何时写入记录。DeskGo 兼容与异常恢复范围见 [安装指南](AGENT_INSTALL.md)。
 
 ## 开发与验证
 
@@ -94,6 +96,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -WeDir "D:\S
 python build_screen.py
 python -m unittest discover -s tests -v
 node --check runtime.js
+npm run test:resources
+npm run test:scheduling
+npm run test:smoothness
+npm run test:sync
 ```
 
 `index.html`、`runtime.js` 每台电脑本机构建，不加入版本库。修改界面后重新构建；后端变更后重启本项目服务。可选前端测试使用 `npm run test:public`，详见 [开发验证](AGENT_INSTALL.md#开发验证)。普通使用不需要 Node.js 或 npm。

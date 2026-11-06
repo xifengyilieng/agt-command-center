@@ -22,29 +22,57 @@ a=prefix.index('  S.drawImage(webBase, -R - 2, -R - 2, ws, ws);')
 b=prefix.index('  drawArtRunners(dt);',a)
 prefix=prefix[:a]+'  drawArtField();\n'+prefix[b:]
 prefix=prefix.replace('  // ring occlusion:', '  drawTaskGraph(dt, G);\n  // ring occlusion:')
+prefix=prefix.replace('  drawTaskGraph(dt, G);\n', '')
 prefix=prefix.replace("    if (rnd() < 0.35) { b.fillStyle = 'rgba(200,204,212,.5)'; b.fillText('n' + ((rnd() * 99) | 0), px + 7, py); }",'')
 prefix=prefix.replace('const N = Math.min(2600, Math.round(1000 + (W * H) / 800));','const N = agtQuality.web;')
 prefix=prefix.replace("for (let i = 0; i < Math.round(6 * C.dataFlicker); i++) pick(slots).c = null;",'// Telemetry cards refresh incrementally when their actual values change.')
 prefix=prefix.replace('let regen = 1;','let regen = agtQuality.cards;')
 prefix=prefix.replace("if (!s.c || (regen > 0 && rnd() < 0.02)) { renderSlot(s); regen--; }", "if ((!s.c || s.dirty) && regen > 0) { renderSlot(s); s.dirty=false; regen--; }\n    if (!s.c) continue;")
 prefix=prefix.replace('Math.min(DPR, 1.5)','Math.min(DPR, agtQuality.trail)')
+prefix=prefix.replace("function mkd(w, h, d) {", "function mkd(w, h, d) {\n  d = agtSurfaceRatio(w,h,d);")
+prefix=prefix.replace('const S_MAIN = S;', 'const agtSharpContext=S; let S_MAIN=S;')
+a=prefix.index('function fit(c) {')
+b=prefix.index('\n}',a)+2
+prefix=prefix[:a]+'''function fit(c) {
+  const r=c.getBoundingClientRect(),d=agtUiPixelRatio();
+  c.width=Math.max(1,Math.round(r.width*d));c.height=Math.max(1,Math.round(r.height*d));
+  c.x=c.getContext('2d');c.x.setTransform(d,0,0,d,0,0);
+  c.w=r.width;c.h=r.height;c.pixelRatio=d;return c;
+}'''+prefix[b:]
+prefix=prefix.replace('  stage.width = W * DPR; stage.height = H * DPR;', '  agtResizeStageSurfaces();')
+prefix=prefix.replace('const GS = 3;', 'let GS = 3;')
+prefix=prefix.replace('const FS = 0.5;', 'let FS = 0.5;')
+prefix=prefix.replace('  W = r.width; H = r.height;',
+  '  W = r.width; H = r.height;\n'
+  '  FS=Math.min(.5,Math.sqrt(agtQuality.farPixels/Math.max(1,W*H)));\n'
+  '  GS=Math.max(3,Math.sqrt(W*H/(agtQuality.surfacePixels*.98)));')
+prefix=prefix.replace("x.globalAlpha = Math.max(0.15, 1 - C.webBlur * 0.3); x.drawImage(orig, 0, 0); x.restore();",
+  "x.globalAlpha = Math.max(0.15, 1 - C.webBlur * 0.3); x.drawImage(orig, 0, 0); x.restore();\n      orig.width=1;orig.height=1;")
 prefix=prefix.replace('  runners = []; for (let i = 0; i < C.runnerCount; i++) runners.push(newRunner(true));','  runners = [];')
 a=prefix.index("  if (HAS_FILTER) S.filter = 'blur(6px)';")
 b=prefix.index("  S.globalAlpha = 1; S.globalCompositeOperation = 'source-over';",a)
 prefix=prefix[:a]+'  compositeGlow();\n'+prefix[b:]
 prefix=prefix.replace("const FONT = '\"JetBrains Mono\",Consolas,monospace';", "const FONT = '\"JetBrains Mono\",\"Microsoft YaHei\",Consolas,monospace';")
-prefix=prefix.replace('  drawRing(dt);','  drawRing(dt);\n  drawTaskBursts(dt);')
+prefix=prefix.replace('  drawRing(dt);','  // Sharp ring/cards are painted after the effects composite.')
+prefix=prefix.replace('  drawCallout();','  // DOM callout and sharp connector are painted on the information layer.')
+prefix=prefix.replace('  let regen = agtQuality.cards;', '  let regen = agtQuality.cards;\n  agtBeginCardFrame();')
+prefix=prefix.replace('(!s.c || s.dirty) && regen > 0', '(!s.c || s.dirty || s.cacheDpr<agtDesiredCardDpr()) && regen > 0')
+prefix=prefix.replace('    S.save(); S.rotate(A);', '    agtTouchCard(s);\n    S.save(); S.rotate(A);')
+prefix=prefix.replace('S.drawImage(s.c, R, -hh / 2, band, hh)', 'S.drawImage(s.c,0,0,s.sourceWidth,s.sourceHeight,R,-hh/2,band,hh)')
+prefix=prefix.replace('  // rulers & rim bands (all rotate with the ring)', '  agtTrimCardCache();\n  // rulers & rim bands (all rotate with the ring)')
+prefix=prefix.replace('for (let k = 0; k < w.n; k++) {', 'for (let k = 0; k < w.n; k+=agtFxStride()) {')
 prefix=prefix.replace('function resizeStage() {','function resizeStage() {\n  agtReleaseStageBuffers();')
 prefix=prefix.replace('function buildCards() {','function buildCards() {\n  releaseTaskCards();')
-suffix=suffix.replace('let last = performance.now();','let last = performance.now(), nextFrameAt=0, lastPanelAt=0;')
+suffix=suffix.replace('let last = performance.now();','let last = performance.now(), nextFrameAt=0, lastPanelAt=0, nextPanelAt=0;')
 suffix=suffix.replace('  const dt = Math.min(0.05, (now - last) / 1000); last = now; T += dt;',
-  '  if (document.hidden || agtState.paused || agtState.wallpaperPaused) { last=now; nextFrameAt=0; lastPanelAt=now; requestAnimationFrame(frame); return; }\n'
-  '  const interval=1000/agtState.fps;\n'
-  '  if (now+.75<nextFrameAt) { requestAnimationFrame(frame); return; }\n'
-  '  nextFrameAt=Math.max(nextFrameAt+interval,now);\n'
+  '  if (document.hidden || agtState.paused || agtState.wallpaperPaused) { last=now; nextFrameAt=0; lastPanelAt=now; nextPanelAt=0; requestAnimationFrame(frame); return; }\n'
+  '  const interval=1000/agtFrameRate();\n'
+  '  if (!agtCanRenderFrame(now,interval)) { requestAnimationFrame(frame); return; }\n'
   '  const dt = Math.min(.1, Math.max(0,(now-last)/1000)); last=now; T+=dt;agtNoteFrame(now);')
 suffix=suffix.replace('  drawAdv(dt); drawDiff(); drawVal(); drawIdx(); agentsTick(dt);',
-  '  drawAdv(dt);\n  if(agtSettings.panelView===\'original\'||now-lastPanelAt>=1000/20){lastPanelAt=now;drawDiff();drawIdx();}')
+  '  if(now+.75>=nextPanelAt){const panelDt=Math.min(.25,(now-lastPanelAt)/1000);lastPanelAt=now;nextPanelAt=agtNextDeadline(now,nextPanelAt,1000/agtQuality.panelFps);drawAdv(panelDt);}\n'
+  '  agtDrawDataPanels(now);')
+suffix=suffix.replace('requestAnimationFrame(frame)', 'agtScheduleFrame(frame)')
 suffix=suffix.replace('DPR = Math.min(window.devicePixelRatio || 1, 2); resizeStage();','DPR = agtPixelRatio(r.width,r.height); resizeStage();')
 suffix=suffix.replace('resizePanels(); ready = true;', 'resizePanels(); ready = true; if(agtState.paused||agtState.wallpaperPaused)agtPaintPausedFrame();')
 suffix=suffix.replace('slots.forEach(s => s.c = null)', 'slots.forEach(s => s.dirty = true)')

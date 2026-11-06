@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from renderer_recovery import RendererRecovery
@@ -20,7 +21,7 @@ class RendererRecoveryTests(unittest.TestCase):
         self.processes = [{'pid': 1, 'parent': 0, 'cmd': 'wallpaper64.exe', 'path': str(self.engine / 'wallpaper64.exe')}]
         self._browser(0, 10, True)
         self.now, self.wait_now = 0, 0
-        self.heartbeat = {'seen': True, 'hostPaused': False, 'pageHidden': False, 'age': 0}
+        self.heartbeat = {'seen': True, 'hostPaused': False, 'pageHidden': False, 'age': 60}
         self.desktop, self.restore_renderer = True, True
         self.actions, self.sleeps = [], []
         self.log = self.base / 'recovery.log'
@@ -80,6 +81,51 @@ class RendererRecoveryTests(unittest.TestCase):
             self.poll(now)
         self.assertEqual(self.actions, [])
         self.assertEqual(self.recovery.status()['phase'], 'healthy')
+
+    def test_recent_heartbeat_avoids_spawning_process_probes(self):
+        self.heartbeat['age'] = 2
+        def unexpected_probe():
+            self.fail('healthy page must not launch a process probe')
+        self.recovery._sample = unexpected_probe
+        for now in range(0, 120, 10):
+            self.poll(now)
+        self.assertEqual(self.recovery.status()['phase'], 'healthy')
+        self.assertEqual(self.actions, [])
+
+    def test_unselected_or_paused_wallpaper_avoids_process_probes(self):
+        def unexpected_probe():
+            self.fail('unselected or paused page must not launch a process probe')
+        self.recovery._sample = unexpected_probe
+        self.heartbeat['hostPaused'] = True
+        self.poll(0)
+        self.assertEqual(self.recovery.status()['phase'], 'suspended')
+        self.selected.clear()
+        self.poll(10)
+        self.assertEqual(self.recovery.status()['phase'], 'idle')
+
+    def test_one_fresh_heartbeat_cannot_mask_a_second_monitors_missing_renderer(self):
+        self.heartbeat['age'] = 2
+        second_file = str(self.project / 'second.html')
+        self.selected['Monitor1'] = {'file': second_file}
+        self._browser(1, 30, False)
+        for now in (0, 30, 40):
+            self.poll(now)
+        self.assertEqual(self.actions, [('closeWallpaper', second_file, 1),
+                                        ('openWallpaper', second_file, 1)])
+
+    def test_fresh_heartbeat_breaks_missing_samples_before_later_crash(self):
+        self.poll(0)
+        self._lose_renderer()
+        self.poll(30)
+        self.poll(40)
+        self.heartbeat['age'] = 2
+        self.poll(50)
+        self.heartbeat['age'] = 60
+        for now in (60, 70, 80):
+            self.poll(now)
+        self.assertEqual(self.actions, [])
+        self.poll(90)
+        self.assertEqual(len(self.actions), 2)
 
     def test_three_missing_samples_and_mature_root_restore_only_same_monitor_file(self):
         self.poll(0)
@@ -235,6 +281,41 @@ class RendererRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.actions), 2)
         self.assertEqual(self.recovery.status()['phase'], 'failed')
         self.assertIn('did not restore', self.recovery.status()['reason'])
+
+    def test_production_cli_reopens_canonical_manifest_and_confirms_original_entry(self):
+        self.project.mkdir(parents=True)
+        manifest = self.project / 'project.json'
+        manifest.write_text('{"file":"index.html","type":"web"}', encoding='utf-8')
+        self.recovery._action = None
+        def execute(args, **kwargs):
+            command, monitor = args[2], int(args[4])
+            if command == 'openWallpaper':
+                self.assertEqual(args[5:], ['-file', str(manifest.resolve())])
+            self.action(command, self.file, monitor)
+        with mock.patch('renderer_recovery.subprocess.run', side_effect=execute) as run:
+            self.crash()
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0],
+                         [str(self.engine/'wallpaper64.exe'), '-control', 'closeWallpaper', '-monitor', '0'])
+        self.assertEqual(self.selected['Monitor0']['file'], self.file)
+        self.assertEqual(self.recovery.status()['phase'], 'awaiting_renderer')
+
+    def test_injected_actions_keep_logical_file_even_with_existing_manifest(self):
+        self.project.mkdir(parents=True)
+        (self.project/'project.json').write_text('{"file":"index.html","type":"web"}', encoding='utf-8')
+        self.crash()
+        self.assertEqual(self.actions, [('closeWallpaper', self.file, 0), ('openWallpaper', self.file, 0)])
+
+    def test_production_cli_preserves_alternate_entry_instead_of_default_manifest(self):
+        self.project.mkdir(parents=True)
+        (self.project/'project.json').write_text('{"file":"index.html","type":"web"}', encoding='utf-8')
+        alternate = str(self.project/'second.html')
+        self.recovery._action = None
+        with mock.patch('renderer_recovery.subprocess.run') as run:
+            self.recovery._invoke('openWallpaper', alternate, 1, self.processes[0], latched_intent=True)
+        self.assertEqual(run.call_args.args[0], [str(self.engine/'wallpaper64.exe'), '-control',
+            'openWallpaper', '-monitor', '1', '-file', alternate])
+        self.assertEqual(self.selected, {'Monitor0': {'file': self.file}})
 
 
 if __name__ == '__main__':

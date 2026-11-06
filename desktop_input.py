@@ -147,6 +147,7 @@ class DesktopInputBridge:
         self._acknowledged = 0
         self._host_paused = True
         self._page_hidden = True
+        self._render_stats = {}
         self._source = input_source
         if self._source is None and os.name == 'nt':
             try:
@@ -170,6 +171,21 @@ class DesktopInputBridge:
             self._updated = now
             self._host_paused = payload.get('hostPaused') is not False
             self._page_hidden = payload.get('pageHidden') is not False
+            stats = payload.get('renderStats')
+            if isinstance(stats, dict):
+                # Bounded numerical diagnostics only, published by the authenticated page.
+                self._render_stats = {key: value for key in
+                    ('fps', 'targetFps', 'frames', 'rawRafFps', 'measuredFps', 'limiterSkips',
+                     'workMs', 'effectsLevel', 'frameP50Ms', 'frameP95Ms', 'frameP99Ms',
+                     'frameMaxMs', 'frameSamples', 'cardCanvases', 'cardPixels', 'cardBackingResizes', 'stageDpr')
+                    if isinstance(value := stats.get(key), (int, float)) and not isinstance(value, bool)
+                    and 0 <= value <= 10**9 and math.isfinite(value)}
+                if isinstance(stats.get('fallback'), bool):
+                    self._render_stats['fallback'] = stats['fallback']
+            if self._host_paused or self._page_hidden:
+                self._queue.clear()
+                self._gesture = None
+                self._last_down = None
             acknowledged=payload.get('acknowledged', 0)
             if isinstance(acknowledged, int) and 0 <= acknowledged <= 10**9:
                 self._acknowledged=acknowledged
@@ -179,7 +195,7 @@ class DesktopInputBridge:
         with self._lock:
             if client_id != self._client:
                 return []
-            if self._clock() - self._updated > self.MAX_AGE:
+            if self._host_paused or self._page_hidden or self._clock() - self._updated > self.MAX_AGE:
                 self._queue.clear()
                 return []
             commands = list(self._queue)
@@ -191,7 +207,8 @@ class DesktopInputBridge:
             return {'available': self._source is not None,
                     'connected': self._client is not None and self._clock()-self._updated <= self.MAX_AGE,
                     'regions': len(self._regions), 'screen': self._screen, 'viewport': self._viewport,
-                    'emitted': self._emitted, 'acknowledged': self._acknowledged}
+                    'emitted': self._emitted, 'acknowledged': self._acknowledged,
+                    'rendering': dict(self._render_stats)}
 
     def recovery_state(self):
         with self._lock:
@@ -226,7 +243,7 @@ class DesktopInputBridge:
         if self._source is None or self._stop.is_set():
             return False
         with self._lock:
-            if self._client is None or self._clock() - self._updated > self.MAX_AGE:
+            if self._client is None or self._host_paused or self._page_hidden or self._clock() - self._updated > self.MAX_AGE:
                 self._gesture = None
                 self._last_down = None
                 return False
@@ -236,7 +253,8 @@ class DesktopInputBridge:
         except (OSError, ValueError):
             sample = None
         with self._lock:
-            if client != self._client or self._clock() - self._updated > self.MAX_AGE or sample is None:
+            if (client != self._client or self._host_paused or self._page_hidden
+                    or self._clock() - self._updated > self.MAX_AGE or sample is None):
                 self._gesture = None
                 self._last_down = None
                 return False
@@ -264,7 +282,8 @@ class DesktopInputBridge:
     def _run(self):
         while not self._stop.is_set():
             with self._lock:
-                active = self._client is not None and self._clock() - self._updated <= self.MAX_AGE
+                active = (self._client is not None and not self._host_paused and not self._page_hidden
+                          and self._clock() - self._updated <= self.MAX_AGE)
             if active:
                 down = self._poll_once()
                 self._stop.wait(.016 if down else .020)

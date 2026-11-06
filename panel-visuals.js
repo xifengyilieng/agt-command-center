@@ -14,7 +14,18 @@ resizePanels=function(){
   flowGrid.x.fillStyle='rgba(120,125,135,.25)';
   for(let i=6;i<cAdv.w;i+=12)for(let j=6;j<cAdv.h;j+=12)flowGrid.x.fillRect(i,j,1,1);
   cAdv.dataset.flowMode=flowState.mode;
+  if(typeof agtMarkPanelsDirty==='function')agtMarkPanelsDirty();
 };
+function agtPanelText(ctx,value,x,y,width){
+  let text=String(value??'');
+  if(!(width>0))return;
+  if(ctx.measureText(text).width>width){
+    let low=0,high=text.length;
+    while(low<high){const mid=Math.ceil((low+high)/2);if(ctx.measureText(text.slice(0,mid)+'…').width<=width)low=mid;else high=mid-1;}
+    text=low?text.slice(0,low)+'…':'';
+  }
+  if(text)ctx.fillText(text,x,y);
+}
 // Match the original field and 22 px/s speed: the previous 65 px/s field
 // changed direction more than twice as quickly, turning its curls into noise.
 function flowAngle(x,y){return Math.sin(x*.035+T*.6)*Math.cos(y*.05-T*.4)*Math.PI+Math.sin((x+y)*.01+T*.2);}
@@ -69,7 +80,7 @@ function drawDiff(){
   const x=cDiff.x,w=cDiff.w,h=cDiff.h;if(!panelsVisible()||!x||w<1||h<1)return;
   if(agtSettings.panelView==='original'){cDiff.setAttribute('aria-label','HALOFLUX 原版动态色场：视觉演示，不表示任务数据');drawOriginalDiff();return;}
   x.clearRect(0,0,w,h);x.textBaseline='top';
-  const font=Math.max(8,Math.min(10,w/36)),gap=12,left=(w-gap)*.48,right=left+gap,rw=w-right;
+  const font=w>=300?11:10,gap=12,left=Math.round((w-gap)*.48),right=left+gap,rw=w-right;
   x.font=`600 ${font}px ${FONT}`;x.fillStyle='#a9b4bd';x.fillText('来源 → 当前任务',0,0);x.fillText('当前上下文',right,0);
   const focus=focusedSession(),sources=agtState.snapshot?.sources||[];
   const bodyTop=font+10,footer=font+8,bodyH=Math.max(14,h-bodyTop-footer);
@@ -80,10 +91,10 @@ function drawDiff(){
     x.strokeStyle=selected?'#98e0cf':'#333d44';x.lineWidth=selected?1.2:.7;
     x.beginPath();x.moveTo(6,yy);x.bezierCurveTo(left*.35,yy,left*.65,targetY,left-8,targetY);x.stroke();
     x.fillStyle=online?'#98e0cf':'#4f5962';x.fillRect(1,yy-2,4,4);
-    x.font=`${font}px ${FONT}`;x.fillText((i?'DSH':'Codex')+(online?' · '+(source.threads??source.sessions??0)+' 主任务':' · 未打开'),12,yy-font-3,left-20);
+    x.font=`${font}px ${FONT}`;agtPanelText(x,(i?'DSH':'Codex')+(online?' · '+(source.threads??source.sessions??0)+' 主任务':' · 未打开'),12,Math.round(yy-font-3),left-20);
   }
   x.fillStyle=focus?'#d4e4dc':'#63716c';x.fillRect(left-10,targetY-3,6,6);
-  x.font=`${font}px ${FONT}`;x.fillText(focus?focus.model:'等待任务',0,h-footer,left);
+  x.font=`${font}px ${FONT}`;agtPanelText(x,focus?focus.model:'等待任务',0,Math.round(h-footer),left);
   const known=!!focus?.contextWindow,pct=known?occupancy(focus):0;
   x.fillStyle=pct>.8?'#f0a6c6':'#d1e4db';x.textAlign='right';x.font=`600 ${font}px ${FONT}`;x.fillText(known?(pct*100).toFixed(1)+'%':'未提供',w,0);x.textAlign='left';
   const cols=22,rows=8,cw=rw/cols,ch=Math.max(1,bodyH/rows);
@@ -91,15 +102,15 @@ function drawDiff(){
     const index=j*cols+i,filled=known&&index<Math.round(pct*rows*cols);
     x.fillStyle=filled?(pct>.8?'#db94b4':'#92cbb8'):'#232a31';x.fillRect(right+i*cw,bodyTop+j*ch,Math.max(.5,cw-.7),Math.max(.5,ch-.8));
   }
-  x.fillStyle='#87998f';x.font=`${font}px ${FONT}`;x.fillText(known?compactValue(focus.contextTokens)+' / '+compactValue(focus.contextWindow):'来源未报告上下文上限',right,h-footer,rw);
+  x.fillStyle='#a3b5ac';x.font=`${font}px ${FONT}`;agtPanelText(x,known?compactValue(focus.contextTokens)+' / '+compactValue(focus.contextWindow):'来源未报告上下文上限',right,Math.round(h-footer),rw);
   cDiff.setAttribute('aria-label',`来源连接：${sources.map(s=>(s.id==='codex'?'Codex':'DSH')+(s.online?'在线':'未打开')).join('，')}；当前上下文${known?(pct*100).toFixed(1)+'%':'未提供'}`);
 }
 function drawIdx(){
   const x=cIdx.x,w=cIdx.w,h=cIdx.h;if(!panelsVisible()||!x||w<1||h<1)return;
   if(agtSettings.panelView==='original'){cIdx.setAttribute('aria-label','HALOFLUX 原版扫描矩阵：视觉演示，不表示任务数据');drawOriginalIdx();return;}
   x.clearRect(0,0,w,h);x.textBaseline='middle';
-  const sessions=selectedSessions().slice(0,6),labels=['上下文','输入','输出','缓存'],font=Math.max(8,Math.min(10,w/37));
-  const left=Math.min(72,w*.23),right=24,cols=28,top=14,cw=(w-left-right)/cols,ch=(h-top)/6;
+  const sessions=selectedSessions().slice(0,6),labels=['上下文','输入','输出','缓存'],font=w>=300?11:10;
+  const left=Math.round(Math.min(96,w*.25)),right=30,cols=28,top=19,cw=(w-left-right)/cols,ch=(h-top)/6;
   x.font=`600 ${font}px ${FONT}`;
   for(let k=0;k<4;k++){x.fillStyle=['#98e0cf','#b7b4ce','#f0a6c6','#9f94bd'][k];x.fillText(labels[k],left+k*7*cw,6);}
   const maxima=[1,Math.max(1,...sessions.map(s=>s.inputTokens)),Math.max(1,...sessions.map(s=>s.outputTokens)),Math.max(1,...sessions.map(s=>s.cachedTokens))];
@@ -108,14 +119,14 @@ function drawIdx(){
     const s=sessions[j],values=s?[occupancy(s),s.inputTokens,s.outputTokens,s.cachedTokens]:[0,0,0,0],yc=top+j*ch+ch/2;
     const selected=s&&agtState.selected===s.source+':'+s.id;
     x.fillStyle=selected?'#ddede4':s?'#889b91':'#39463e';x.font=`${font}px ${FONT}`;
-    x.fillText(s?String(j+1).padStart(2,'0')+' '+(s.title||'未命名').slice(0,5):'—',0,yc,left-4);
+    agtPanelText(x,s?String(j+1).padStart(2,'0')+' '+(s.title||'未命名'):'—',0,Math.round(yc),left-5);
     for(let i=0;i<cols;i++){
       const kind=Math.floor(i/7),level=(i%7+.5)/7,ratio=values[kind]/maxima[kind],filled=s&&ratio>level;
       x.fillStyle=filled?['#98e0cf','#b7b4ce','#f0a6c6','#9f94bd'][kind]:'#252d33';
       if(i===scan&&filled)x.fillStyle='#f0f6f2';
       x.fillRect(left+i*cw,top+j*ch+1,Math.max(.5,cw-.8),Math.max(.5,ch-2));
     }
-    x.fillStyle=s&&isActive(s)?'#f0a6c6':'#7f8d86';if(s)x.fillText(isActive(s)?'执行':'空闲',w-right+3,yc,right-3);
+    x.fillStyle=s&&isActive(s)?'#f0a6c6':'#a2b4aa';if(s)agtPanelText(x,isActive(s)?'执行':'空闲',Math.round(w-right+3),Math.round(yc),right-3);
   }
   cIdx.setAttribute('aria-label','前六个任务：上下文为实际占比；输入、输出与缓存按当前六个任务最大值归一比较');
 }

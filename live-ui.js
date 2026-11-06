@@ -6,9 +6,11 @@ const compactValue=n=>n>=1e8?(n/1e8).toFixed(2)+'亿':n>=1e4?(n/1e4).toFixed(1)+
 const isActive=s=>s?.status==='running'||s?.status==='active'||s?.status==='in_progress';
 const statusText={running:'执行中',active:'活动中',idle:'空闲',unknown:'待确认',offline:'未打开',completed:'完成',failed:'失败',pending:'等待中',in_progress:'执行中'};
 const toolLabel=name=>({exec:'工具编排',exec_command:'终端执行',CommandExecution:'终端执行',McpToolCall:'外部工具',mcp_tool:'外部工具',web_search:'网页检索',apply_patch:'修改文件',wait:'等待结果',write_stdin:'进程交互'})[name]||String(name||'').replace(/^functions\./,'');
-const agtState={snapshot:null,filter:'all',selected:null,activeOnly:false,includeSubagents:false,paused:false,failed:false,feedSignature:'',wallpaperPaused:false,fps:location.protocol==='file:'?30:60,focusMode:false};
+const agtState={snapshot:null,filter:'all',selected:null,activeOnly:false,includeSubagents:false,paused:false,failed:false,feedSignature:'',wallpaperPaused:false,fps:60,focusMode:false};
 let agtSettings={name:'AGT 作战指挥台',quiet:false,panelsCollapsed:false,quality:'balanced',panelView:'monitor'};
 try{const stored=JSON.parse(localStorage.getItem('agt.screen.v3')||'null');if(stored)Object.assign(agtSettings,stored);}catch{}
+// Replace the old blanket downsampling profile once; later choices stay user-controlled.
+if(agtSettings.resourceProfile!==2){agtSettings.quality='balanced';agtSettings.resourceProfile=2;saveScreenSettings();}
 if(!['balanced','high','low'].includes(agtSettings.quality))agtSettings.quality='balanced';
 if(!['monitor','original'].includes(agtSettings.panelView))agtSettings.panelView='monitor';
 let T=0;
@@ -19,6 +21,8 @@ function selectedSessions(){return sourceSessions().filter(s=>agtState.includeSu
 function focusedSession(){return selectedSessions().find(s=>s.source+':'+s.id===agtState.selected)||null;}
 function occupancy(s){return s?.contextWindow?Math.max(0,Math.min(1,s.contextTokens/s.contextWindow)):0;}
 function saveScreenSettings(){try{localStorage.setItem('agt.screen.v3',JSON.stringify(agtSettings));}catch{}}
+const agtMarkupCache=new WeakMap();
+function agtSetMarkup(element,markup){if(agtMarkupCache.get(element)!==markup){element.innerHTML=markup;agtMarkupCache.set(element,markup);}}
 function applyScreenSettings(){
   document.title=agtSettings.name;
   byId('stageWrap').classList.toggle('quiet',!!agtSettings.quiet);
@@ -36,6 +40,7 @@ function applyScreenSettings(){
   byId('matrixCaption').innerHTML=escapeHTML(original?matrixText:'相对用量对比 · ')+'<a href="https://github.com/Ryder191/haloflux" target="_blank" rel="noreferrer" title="原作 HALOFLUX · Ryder191">HALOFLUX ↗</a>';
   byId('matrixCaption').title=original?'原作效果为视觉演示，不代表任务数据':matrixText+'上下文按各任务的窗口占比显示';
   if(typeof window.agtSetQuality==='function')window.agtSetQuality(agtSettings.quality);
+  if(typeof agtMarkPanelsDirty==='function')agtMarkPanelsDirty();
 }
 function toast(message){byId('toast').textContent=message;byId('toast').classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>byId('toast').classList.remove('show'),2000);}
 function updateCallout(){const s=focusedSession();byId('chkK').textContent=s?`${s.source==='codex'?'Codex':'DSH'} · ${s.model}`:'真实任务关联';byId('chkV').textContent=s?`${statusText[s.status]} · 输出 ${compactValue(s.outputTokens)}`:'等待本机任务';}
@@ -44,10 +49,10 @@ function renderWorkspace(){
   const rows=s?[
     ...(s.isSubagent?[['归属',s.parentTitle||'协作子任务','']]:[]),
     ['状态',(statusText[s.status]||'待确认')+' · '+(s.source==='codex'?'Codex':'DSH'),isActive(s)?'status-running':''],
-    ['模型',s.model||'未提供',''],['当前工具',s.lastTool?toolLabel(s.lastTool):'暂无记录',''],
+    ['模型',s.model||'未提供',''],[isActive(s)?'当前工具':'最近工具',s.lastTool?toolLabel(s.lastTool):'暂无记录',''],
     ['上下文',s.contextWindow?(occupancy(s)*100).toFixed(1)+'%':'未提供','']
   ]:[['任务','等待软件启动',''],['来源','自动接入 Codex / DSH',''],['状态','本机监听中','status-running']];
-  byId('code').innerHTML=(s?`<div class="focus-task-title" title="${escapeHTML(s.title)}">${escapeHTML(s.title||'未命名任务')}</div>`:'')+rows.map(r=>`<div class="code-line"><span class="key">${r[0]}</span><span class="value ${r[2]}" title="${escapeHTML(r[1])}">${escapeHTML(r[1])}</span></div>`).join('');
+  agtSetMarkup(byId('code'),(s?`<div class="focus-task-title" title="${escapeHTML(s.title)}">${escapeHTML(s.title||'未命名任务')}</div>`:'')+rows.map(r=>`<div class="code-line"><span class="key">${r[0]}</span><span class="value ${r[2]}" title="${escapeHTML(r[1])}">${escapeHTML(r[1])}</span></div>`).join(''));
 }
 function renderFeed(){
   const events=(agtState.snapshot?.events||[]).filter(e=>agtState.filter==='all'||e.source===agtState.filter).slice(0,5).reverse();
@@ -63,7 +68,7 @@ function renderAgents(){
   const sessions=selectedSessions();byId('dispatchHeading').textContent=(agtState.includeSubagents?'任务编队 · ':'主任务 · ')+sessions.length;
   const priority=s=>s.source+':'+s.id===agtState.selected?2:isActive(s)?1:0;
   const visible=[...sessions].sort((a,b)=>priority(b)-priority(a)).slice(0,5);
-  byId('agents').innerHTML=visible.map(s=>{const key=s.source+':'+s.id,title=s.title||'未命名任务',index=sessions.indexOf(s)+1;return`<button type="button" class="ag ${isActive(s)?'live':''} ${key===agtState.selected?'selected':''}" data-session="${escapeHTML(key)}" title="${escapeHTML((s.source==='codex'?'Codex':'DSH')+' · '+title+' · '+(statusText[s.status]||'待确认'))}"><span class="id">${String(index).padStart(2,'0')}</span><span class="ag-name">${escapeHTML(title)}</span><span class="st">${statusText[s.status]||'待确认'}</span></button>`;}).join('')||'<span class="empty-task">暂无在线任务</span>';
+  agtSetMarkup(byId('agents'),visible.map(s=>{const key=s.source+':'+s.id,title=s.title||'未命名任务',index=sessions.indexOf(s)+1;return`<button type="button" class="ag ${isActive(s)?'live':''} ${key===agtState.selected?'selected':''}" data-session="${escapeHTML(key)}" title="${escapeHTML((s.source==='codex'?'Codex':'DSH')+' · '+title+' · '+(statusText[s.status]||'待确认'))}"><span class="id">${String(index).padStart(2,'0')}</span><span class="ag-name">${escapeHTML(title)}</span><span class="st">${statusText[s.status]||'待确认'}</span></button>`;}).join('')||'<span class="empty-task">暂无在线任务</span>');
   const children=sourceSessions().filter(s=>s.isSubagent).length;
   byId('dispatchCaption').textContent=`显示 ${visible.length} / ${sessions.length}`+(!agtState.includeSubagents&&children?` · ${children} 个协作子任务可在全部任务中查看`:' · 点击查看任务');
 }
@@ -76,7 +81,11 @@ function requestRateDisplay(info){
   return{text,meta:valid?ageText:'',title:details||'请求完成并写入用量后才能计算；当前没有可用样本'};
 }
 function renderRequestRate(info){
-  const display=requestRateDisplay(info);byId('k4').textContent=display.text;byId('k4').title=display.title;byId('rateMeta').textContent=display.meta;byId('rateLabel').textContent='最近请求均速';
+  const display=requestRateDisplay(info),value=byId('k4'),meta=byId('rateMeta');
+  if(value.textContent!==display.text)value.textContent=display.text;
+  if(value.title!==display.title)value.title=display.title;
+  if(meta.textContent!==display.meta)meta.textContent=display.meta;
+  if(byId('rateLabel').textContent!=='最近请求均速')byId('rateLabel').textContent='最近请求均速';
 }
 function renderTaskDialog(){
   const list=selectedSessions().filter(s=>!agtState.activeOnly||isActive(s));
@@ -93,13 +102,63 @@ function renderSnapshot(){
   const topology=snap.topology||{nodes:[],edges:[]};
   byId('stageSub').textContent=agtState.failed?'连接中断，保留最后记录':`真实节点 ${topology.nodes.length} · 已记录关系 ${topology.edges.length} · ${total.running||0} 个任务执行中`;
   renderWorkspace();renderFeed();renderRoutes();renderAgents();updateCallout();syncTaskScene();
+  if(typeof agtMarkPanelsDirty==='function')agtMarkPanelsDirty();
   if(byId('tasksDialog').open)renderTaskDialog();
 }
-async function pollAGT(){
-  try{const host=location.protocol==='file:'?window.agtWallpaperHost:null;const response=await fetch(host?host.api+'/api/state':'/api/state',{cache:'no-store',signal:AbortSignal.timeout(6500),headers:host?{'X-AGT-Token':host.token}:{}});if(!response.ok)throw Error('采集器未连接');const snap=await response.json();if(snap.discovering){byId('connection').innerHTML='<i></i>识别来源';return;}agtState.snapshot=snap;agtState.failed=Date.now()/1000-snap.at>15;byId('connection').classList.toggle('stale',agtState.failed);byId('connection').innerHTML=agtState.failed?'<i></i>更新停滞':'<i></i>实时连接';renderSnapshot();}
-  catch{agtState.failed=true;byId('connection').classList.add('stale');byId('connection').innerHTML='<i></i>正在重连';byId('stageSub').textContent='采集器未连接，正在重试';renderRoutes();}
-  finally{setTimeout(pollAGT,2000);}
+const agtPoll={timer:null,inflight:false,wake:false,etag:'',signature:'',failures:0,checkedAt:0,controller:null,abortedForWake:false};
+function agtRefreshConnection(at){
+  if(Number.isFinite(at)&&at>0)agtPoll.checkedAt=at;
+  const previous=agtState.failed;
+  agtState.failed=!agtPoll.checkedAt||Date.now()/1000-agtPoll.checkedAt>5;
+  const el=byId('connection'),label=agtState.failed?'更新停滞':'实时连接';
+  el.classList.toggle('stale',agtState.failed);
+  agtSetMarkup(el,'<i></i>'+label);
+  el.title=agtPoll.checkedAt?'最近采集 '+new Date(agtPoll.checkedAt*1000).toLocaleTimeString('zh-CN',{hour12:false}):'等待采集器';
+  return previous!==agtState.failed;
 }
+function agtWakeData(){
+  clearTimeout(agtPoll.timer);agtPoll.wake=true;
+  if(agtPoll.inflight){agtPoll.abortedForWake=true;agtPoll.controller?.abort();}
+  else pollAGT();
+}
+async function pollAGT(){
+  if(agtPoll.inflight){agtPoll.wake=true;return;}
+  clearTimeout(agtPoll.timer);agtPoll.inflight=true;agtPoll.wake=false;
+  const began=performance.now(),controller=new AbortController();
+  agtPoll.controller=controller;agtPoll.abortedForWake=false;
+  const timeout=setTimeout(()=>controller.abort(),3500);
+  try{
+    const host=location.protocol==='file:'?window.agtWallpaperHost:null,headers=host?{'X-AGT-Token':host.token}:{};
+    if(agtPoll.etag&&agtState.snapshot)headers['If-None-Match']=agtPoll.etag;
+    const response=await fetch(host?host.api+'/api/state':'/api/state',{cache:'no-store',signal:controller.signal,headers});
+    if(response.status===304){
+      agtPoll.failures=0;
+      const changed=agtRefreshConnection(Number(response.headers.get('X-AGT-Checked-At')));
+      renderRequestRate(agtState.snapshot?.totals?.outputRateInfo);
+      if(changed)renderSnapshot();
+      return;
+    }
+    if(!response.ok)throw Error('采集器未连接');
+    const snap=await response.json();
+    if(snap.discovering){agtPoll.failures=0;byId('connection').classList.remove('stale');agtSetMarkup(byId('connection'),'<i></i>识别来源');return;}
+    agtPoll.failures=0;agtPoll.etag=response.headers.get('ETag')||'';agtState.snapshot=snap;
+    const connectionChanged=agtRefreshConnection(Number(response.headers.get('X-AGT-Checked-At'))||Number(snap.at));
+    const signature=JSON.stringify([snap.sources,snap.sessions,snap.events,snap.totals]);
+    if(signature!==agtPoll.signature||connectionChanged){agtPoll.signature=signature;renderSnapshot();}
+    else renderRequestRate(snap.totals?.outputRateInfo);
+  }catch{
+    if(agtPoll.abortedForWake)return;
+    agtPoll.failures++;agtState.failed=true;byId('connection').classList.add('stale');
+    agtSetMarkup(byId('connection'),'<i></i>正在重连');
+    byId('stageSub').textContent='采集器未连接，正在重试';renderRoutes();
+  }finally{
+    clearTimeout(timeout);agtPoll.controller=null;agtPoll.abortedForWake=false;agtPoll.inflight=false;
+    const hidden=document.hidden||agtState.wallpaperPaused;
+    const interval=agtPoll.failures?Math.min(15000,1000*2**Math.min(4,agtPoll.failures-1)):hidden?10000:750;
+    agtPoll.timer=setTimeout(pollAGT,agtPoll.wake?0:Math.max(50,interval-(performance.now()-began)));
+  }
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){agtWakeData();if(typeof agtWakeRender==='function')agtWakeRender();}});
 function selectTask(key){agtState.selected=key;renderSnapshot();}
 function wallpaperHost(){return !!window.agtWallpaperHost;}
 function syncScreenControls(){
@@ -135,12 +194,13 @@ function applyWallpaperProperties(p){
   if(p.ringspeed)setParam('ringSpeed',Number(p.ringspeed.value),true);
 }
 function applyWallpaperGeneral(p){if(p.fps)agtState.fps=Math.max(5,Math.min(60,Number(p.fps)));}
-window.wallpaperPropertyListener={applyUserProperties:p=>{if(window.agtWallpaperHost)window.agtWallpaperHost.native=true;applyWallpaperProperties(p);},applyGeneralProperties:p=>{if(window.agtWallpaperHost)window.agtWallpaperHost.native=true;applyWallpaperGeneral(p);},setPaused:paused=>{if(window.agtWallpaperHost)window.agtWallpaperHost.native=true;agtState.wallpaperPaused=!!paused;}};
+function agtSetHostPaused(paused){const was=agtState.wallpaperPaused;agtState.wallpaperPaused=!!paused;if(was&&!paused){agtWakeData();if(typeof agtWakeRender==='function')agtWakeRender();}}
+window.wallpaperPropertyListener={applyUserProperties:p=>{if(window.agtWallpaperHost)window.agtWallpaperHost.native=true;applyWallpaperProperties(p);},applyGeneralProperties:p=>{if(window.agtWallpaperHost)window.agtWallpaperHost.native=true;applyWallpaperGeneral(p);},setPaused:paused=>{if(window.agtWallpaperHost)window.agtWallpaperHost.native=true;agtSetHostPaused(paused);}};
 window.addEventListener('message',e=>{
   if(parent===window||e.source!==parent||!['null',location.origin].includes(e.origin)||e.data?.type!=='agt-wallpaper')return;
   if(e.data.properties)applyWallpaperProperties(e.data.properties);
   if(e.data.general)applyWallpaperGeneral(e.data.general);
-  if(typeof e.data.paused==='boolean')agtState.wallpaperPaused=e.data.paused;
+  if(typeof e.data.paused==='boolean')agtSetHostPaused(e.data.paused);
 });
 function syncQualityControls(value=byId('qualityInput').value){
   const selected=['balanced','high','low'].includes(value)?value:'balanced';
@@ -165,7 +225,7 @@ function agtBoot(){
   byId('qualityOptions').onclick=e=>{const button=e.target.closest('[data-quality]');if(button)syncQualityControls(button.dataset.quality);};
   byId('panelViewOptions').onclick=e=>{const button=e.target.closest('[data-panel-view]');if(button)syncPanelViewControls(button.dataset.panelView);};
   byId('settingsDialog').addEventListener('close',()=>{if(byId('settingsDialog').returnValue!=='save')return;agtSettings={...agtSettings,name:byId('nameInput').value.trim()||'AGT 作战指挥台',quiet:byId('quietInput').checked,panelsCollapsed:!byId('panelsInput').checked,quality:byId('qualityInput').value,panelView:byId('panelViewInput').value};saveScreenSettings();applyScreenSettings();toast('设置已保存');});
-  byId('motionButton').onclick=()=>{agtState.paused=!agtState.paused;syncScreenControls();toast(agtState.paused?'动效已暂停，任务数据继续更新':'动效已继续');};
+  byId('motionButton').onclick=()=>{agtState.paused=!agtState.paused;syncScreenControls();if(!agtState.paused&&typeof agtWakeRender==='function')agtWakeRender();toast(agtState.paused?'动效已暂停，任务数据继续更新':'动效已继续');};
   toggleFS=toggleScreenMode;byId('fullscreenButton').onclick=toggleScreenMode;
   document.addEventListener('fullscreenchange',syncScreenControls);syncScreenControls();
   const showTasks=()=>{renderTaskDialog();byId('tasksDialog').showModal();};byId('tasksButton').onclick=showTasks;byId('allTasksButton').onclick=showTasks;byId('workspaceDetailsButton').onclick=showTasks;byId('closeTasks').onclick=()=>byId('tasksDialog').close();

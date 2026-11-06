@@ -1,9 +1,15 @@
 {
   "name": "agt-command-center",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Optional browser checks for the local AGT dashboard",
   "engines": {"node": ">=20"},
-  "scripts": {"test:public": "node tests/public-smoke.cjs"},
+  "scripts": {
+    "test:public": "node tests/public-smoke.cjs",
+    "test:resources": "node tests/render-budget.cjs",
+    "test:scheduling": "node tests/render-scheduling.cjs",
+    "test:smoothness": "node tests/smoothness-smoke.cjs",
+    "test:sync": "node tests/state-sync-smoke.cjs"
+  },
   "devDependencies": {"playwright": "^1.56.0"}
 }

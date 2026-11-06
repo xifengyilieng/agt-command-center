@@ -10,7 +10,7 @@ if ($LASTEXITCODE -ne 0) { throw 'AGT build failed.' }
 $healthy = $false
 try {
     $health = Invoke-RestMethod -Uri "$dashboardUrl/api/health" -TimeoutSec 2
-    $healthy = $health.app -eq 'agt-command-center' -and $health.ok -and $health.version -ge 10
+    $healthy = $health.app -eq 'agt-command-center' -and $health.ok -and $health.version -ge 11
 } catch {}
 if (-not $healthy) {
     $ownedServers = Get-CimInstance Win32_Process | Where-Object {
@@ -23,7 +23,7 @@ if (-not $healthy) {
         Start-Sleep -Milliseconds 300
         try {
             $health = Invoke-RestMethod -Uri "$dashboardUrl/api/health" -TimeoutSec 1
-            if ($health.app -eq 'agt-command-center' -and $health.ok -and $health.version -ge 10) { $healthy=$true; break }
+            if ($health.app -eq 'agt-command-center' -and $health.ok -and $health.version -ge 11) { $healthy=$true; break }
         } catch {}
     }
 }

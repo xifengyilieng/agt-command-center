@@ -210,7 +210,13 @@ class RendererRecovery:
             return
         args = [main['path'], '-control', command, '-monitor', str(monitor)]
         if command == 'openWallpaper':
-            args += ['-file', file]
+            # The CLI reliably opens our canonical web project via its manifest;
+            # Wallpaper Engine still records index.html as the selected file.
+            # Keep the logical file for injected actions and selection checks.
+            manifest = self.project / 'project.json'
+            cli_file = (str(manifest) if _normal(file) == _normal(self.project / 'index.html')
+                        and manifest.is_file() else file)
+            args += ['-file', cli_file]
         subprocess.run(args, check=True, timeout=4, creationflags=CREATE_NO_WINDOW,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -307,6 +313,30 @@ class RendererRecovery:
             return
         try:
             selected = {n: file for n, file in self._selected().items() if self._owned_file(file)}
+            if not selected:
+                self._roots.clear()
+                self._blocked_roots.clear()
+                self._set_status('idle', 'project is not selected')
+                return
+            heartbeat = self._heartbeat()
+            allowed = (isinstance(heartbeat, dict) and heartbeat.get('seen') is True
+                       and heartbeat.get('hostPaused') is False and heartbeat.get('pageHidden') is False)
+            if not allowed:
+                for state in self._roots.values():
+                    state['missing'] = 0
+                self._set_status('suspended', 'host/page is paused or unobserved')
+                return
+            age = heartbeat.get('age')
+            if (len(selected) == 1 and isinstance(age, (int, float))
+                    and not isinstance(age, bool) and 0 <= age < 20):
+                # The page itself is alive: do not launch PowerShell/WMI every
+                # ten seconds solely to rediscover its healthy renderer.
+                self._roots.clear()
+                self._blocked_roots.clear()
+                with self._lock:
+                    self._status['monitors'] = {}
+                self._set_status('healthy', 'recent authenticated page heartbeat; process probe skipped')
+                return
             processes = self._sample()
             main = self._main(processes)
             if not selected or not main:

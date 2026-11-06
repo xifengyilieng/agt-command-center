@@ -2,7 +2,7 @@
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/jetbrains-mono-600.ttf') format('truetype')}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:800;font-display:swap;src:url('/fonts/jetbrains-mono-800.ttf') format('truetype')}
 
-:root{--safe-bottom:0px;--header-height:34px;--panel-height:144px}
+:root{--safe-bottom:0px;--header-height:34px;--panel-height:164px}
 html,body{height:100%;overflow:hidden;font-family:'JetBrains Mono','Microsoft YaHei',Consolas,monospace}
 button,input{font:inherit}button{cursor:pointer;background:#0e1014;border:1px solid #363b43;color:#cbd0d9;font-size:11px;padding:3px 7px}button:hover{color:#fff;border-color:#a0a8b7}
 button:focus-visible,input:focus-visible,a:focus-visible{outline:1px solid #98e0cf;outline-offset:2px}a{color:inherit;text-decoration:none}a:hover{color:#fff}

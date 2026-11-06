@@ -32,3 +32,8 @@ tests/native-*
 tests/reference-smoke.cjs
 tests/*.cjs
 !tests/public-smoke.cjs
+!tests/render-budget.cjs
+!tests/render-scheduling.cjs
+!tests/smoothness-smoke.cjs
+!tests/state-sync-smoke.cjs
+!tests/native-resource-snapshot.ps1
